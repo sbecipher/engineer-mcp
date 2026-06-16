@@ -1,0 +1,72 @@
+name: Build and Push Docker Image to GCP Artifact Registry
+
+on:
+  push:
+    branches: ["main"]
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: data-cipher
+  PROJECT_NUMBER: 875978034496
+  LOCATION: us-central1
+  REPO: gcp-engineer-agent
+  IMAGE: mcp-proxy-agent
+  SERVICE: mcp-proxy-agent
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image URIs
+        run: |
+          echo "IMAGE_URI=${{ env.LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}" >> $GITHUB_ENV
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ env.PROJECT_NUMBER }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-artifact-pusher@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.LOCATION }}-docker.pkg.dev --quiet
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push MCP image
+        id: build-mcp
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deploy/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.IMAGE_URI }}:${{ github.sha }}
+            ${{ env.IMAGE_URI }}:latest
+            ${{ startsWith(github.ref, 'refs/tags/v') && format('{0}:{1}', env.IMAGE_URI, github.ref_name) || '' }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy MCP Server to Cloud Run
+        run: |
+          IMAGE_DIGEST="${IMAGE_URI}@${{ steps.build-mcp.outputs.digest }}"
+          gcloud run deploy ${{ env.SERVICE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --region=${{ env.LOCATION }} \
+            --image=${IMAGE_DIGEST} \
+            --no-allow-unauthenticated \
+            --quiet
