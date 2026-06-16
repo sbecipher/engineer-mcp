@@ -11,6 +11,7 @@ permissions:
   id-token: write
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PROJECT_ID: data-cipher
   PROJECT_NUMBER: 875978034496
   LOCATION: us-central1
